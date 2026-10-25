@@ -415,7 +415,13 @@ tree_fit <- rpart(high_risk ~ ., data = train, method = "class", cp = 0.005)
 tree_prob <- predict(tree_fit, test, type = "prob")[, "High"]
 tree_pred <- predict(tree_fit, test, type = "class")
 png("outputs/plots/54_decision_tree.png", width = 1000, height = 700, res = 120)
-rpart.plot(tree_fit, main = "Decision tree"); dev.off()
+if (nrow(tree_fit$frame) > 1) {
+  rpart.plot(tree_fit, main = "Decision tree")
+} else {
+  # a tree with no splits cannot be drawn; keep the pipeline running
+  plot.new(); title("Decision tree: no splits at cp = 0.005")
+}
+dev.off()
 
 rf_fit <- randomForest(high_risk ~ ., data = train, ntree = 300, importance = TRUE)
 rf_prob <- predict(rf_fit, test, type = "prob")[, "High"]
@@ -445,6 +451,21 @@ for (r in res) { cat("\n====", r$row$model, "====\n"); print(r$cm$table) }
 comparison <- bind_rows(lapply(res, `[[`, "row"))                              
 print(comparison)
 write_csv(comparison, "outputs/tables/model_comparison.csv")
+
+# Confusion matrices (counts on the 20% test set) saved as a table and a figure
+conf_tbl <- bind_rows(lapply(res, function(r) {
+  as.data.frame(r$cm$table, stringsAsFactors = FALSE) %>%
+    transmute(model = r$row$model, predicted = Prediction, actual = Reference, n = Freq)
+}))
+write_csv(conf_tbl, "outputs/tables/confusion_matrices.csv")
+p_conf <- ggplot(conf_tbl, aes(predicted, actual, fill = n)) +
+  geom_tile(colour = "white") +
+  geom_text(aes(label = comma(n)), size = 4) +
+  scale_fill_gradient(low = "#FFF3E0", high = "#E64A19", guide = "none") +
+  facet_wrap(~ model) +
+  labs(title = "Confusion matrices on the test set",
+       x = "Predicted class", y = "Actual class")
+save_plot(p_conf, "63_confusion_matrices", 10, 4)
 
 # 62. ROC curves
 png("outputs/plots/62_roc_curves.png", width = 900, height = 700, res = 120)
