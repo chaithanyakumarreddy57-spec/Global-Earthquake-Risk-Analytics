@@ -1,476 +1,253 @@
 ---
+title: "Global Earthquake Risk Analytics using R"
+subtitle: "Case Study Report"
+author: "C Chaitanya Kumar Reddy (Roll No. 160124771035)"
+date: "B.E. Artificial Intelligence and Data Science, Chaitanya Bharathi Institute of Technology (CBIT), Hyderabad"
 output:
   pdf_document:
     latex_engine: xelatex
-    number_sections: true
     fig_caption: true
-geometry: "a4paper, top=2.6cm, bottom=2.6cm, left=2.5cm, right=2.5cm"
-fontsize: 11pt
-linestretch: 1.12
+    number_sections: true
+geometry: "a4paper, top=2cm, bottom=2cm, left=2.2cm, right=2.2cm"
+fontsize: 10pt
 colorlinks: true
-linkcolor: blue
 urlcolor: blue
 header-includes:
   - \usepackage{fancyhdr}
   - \usepackage{float}
   - \usepackage{booktabs}
   - \usepackage{caption}
-  - \usepackage{tikz}
-  - \usetikzlibrary{shapes.geometric, arrows.meta, positioning}
-  - \captionsetup{font=small, labelfont=bf, skip=6pt}
+  - \usepackage{needspace}
+  - \captionsetup{font=small, labelfont=bf, skip=3pt}
   - \pagestyle{fancy}
   - \fancyhf{}
   - \fancyhead[L]{\small Global Earthquake Risk Analytics using R}
-  - \fancyhead[R]{\small CBIT, Hyderabad}
+  - \fancyhead[R]{\small C Chaitanya Kumar Reddy, 160124771035}
   - \fancyfoot[C]{\thepage}
-  - \renewcommand{\headrulewidth}{0.3pt}
   - \floatplacement{figure}{H}
+  - \setlength{\parskip}{3pt}
 ---
 
 ```{r setup, include=FALSE}
-# Everything below is read from the project's own files, so numbers in the
-# report always match outputs/tables and data/processed.
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
-                      fig.align = "center", out.width = "92%")
+                      fig.align = "center", out.width = "95%")
 suppressPackageStartupMessages({
-  library(dplyr); library(readr); library(knitr); library(kableExtra); library(scales)
+  library(tidyverse); library(lubridate); library(knitr)
+  library(kableExtra); library(scales); library(patchwork)
 })
-
-# Project root = parent of report/ (works for RStudio "Knit" and rmarkdown::render)
+# Project root = parent of report/ (RStudio "Knit" runs in report/)
 proj <- normalizePath(file.path(getwd(), ".."), mustWork = FALSE)
 if (!dir.exists(file.path(proj, "outputs"))) proj <- normalizePath(getwd())
 P   <- function(...) file.path(proj, ...)
 fig <- function(f) P("outputs", "plots", f)
 
-raw  <- read_csv(P("data", "raw", "database.csv"), show_col_types = FALSE,
-                 col_types = cols(Date = col_character(), Time = col_character()))
-eq   <- readRDS(P("data", "processed", "earthquakes_clean.rds"))
-miss <- read_csv(P("outputs", "tables", "missing_values.csv"), show_col_types = FALSE)
-cmp  <- read_csv(P("outputs", "tables", "model_comparison.csv"), show_col_types = FALSE)
-imp  <- read_csv(P("outputs", "tables", "feature_importance.csv"), show_col_types = FALSE)
-cl   <- read_csv(P("outputs", "tables", "cluster_profile.csv"), show_col_types = FALSE)
-grid <- read_csv(P("outputs", "tables", "grid_cells.csv"), show_col_types = FALSE)
-reg  <- read_csv(P("outputs", "tables", "risk_by_region.csv"), show_col_types = FALSE)
-top20 <- read_csv(P("outputs", "tables", "top20_strongest.csv"), show_col_types = FALSE)
-
-two_fig <- function(f1, f2, cap, label) {
-  cat(sprintf("\\begin{figure}[H]\\centering\n\\includegraphics[width=0.48\\textwidth]{%s}\\hfill\\includegraphics[width=0.48\\textwidth]{%s}\n\\caption{%s}\\label{%s}\n\\end{figure}\n", f1, f2, cap, label))
+# two saved figures side by side
+two_fig <- function(f1, f2, cap, w = 0.485) {
+  cat(sprintf("\\begin{figure}[H]\\centering\\includegraphics[width=%.3f\\textwidth]{%s}\\hfill\\includegraphics[width=%.3f\\textwidth]{%s}\\caption{%s}\\end{figure}\n", w, f1, w, f2, cap))
 }
-
-risk_levels <- c("Low", "Moderate", "High", "Severe")
-eq$risk_level <- factor(eq$risk_level, levels = risk_levels)
-
-n_raw   <- nrow(raw); p_raw <- ncol(raw); n <- nrow(eq)
-n_removed <- n_raw - n
-n_high  <- sum(eq$risk_level %in% c("High", "Severe"))
 pct <- function(x, d = 1) paste0(formatC(100 * x, format = "f", digits = d), "%")
 f2  <- function(x) formatC(x, format = "f", digits = 2)
 f3  <- function(x) formatC(x, format = "f", digits = 3)
+```
 
-best   <- cmp %>% arrange(desc(f1), desc(auc)) %>% slice(1)
-baseline_acc <- max(table(eq$risk_level %in% c("High", "Severe"))) / n
+# Introduction and problem
 
-yearly <- eq %>% count(year)
-trend  <- lm(n ~ year, data = yearly)
-trend_b <- coef(trend)[["year"]]; trend_p <- summary(trend)$coefficients["year", 4]
-kw   <- kruskal.test(magnitude ~ depth_category, data = eq)
-sp   <- suppressWarnings(cor.test(eq$magnitude, eq$depth, method = "spearman", exact = FALSE))
-chi_m <- chisq.test(table(eq$month))
-chi_rd <- suppressWarnings(chisq.test(table(eq$risk_level, eq$depth_category)))
-iqr_out <- function(x) { q <- quantile(x, c(.25, .75)); i <- diff(q); sum(x < q[1] - 1.5 * i | x > q[2] + 1.5 * i) }
-busiest <- yearly %>% arrange(desc(n)) %>% slice(1)
+Earthquakes are among the most damaging natural hazards. How much damage an event can cause depends mainly on its **magnitude** (energy released), its **depth** (shallow events shake the surface harder) and its **location**. A raw catalogue of tens of thousands of events is hard to read, so this case study turns a public catalogue of significant earthquakes into a clear picture of global seismic activity and ranks events by a simple, explainable severity score. The score and models describe *recorded* events; they are not a forecast and ignore population, buildings and local geology.
+
+# Objectives
+
+1. Clean the catalogue and describe the distribution of magnitude and depth, and the temporal and geographic patterns of earthquakes.
+2. Build a transparent 0--100 **risk score** and four risk levels (Low, Moderate, High, Severe), and group earthquakes with K-means clustering.
+3. **Predict** whether an event is High/Severe from location, time and catalogue information, and compare three models.
+
+# Dataset
+
+```{r data-load}
+raw <- read_csv(P("data", "raw", "database.csv"), show_col_types = FALSE,
+                col_types = cols(Date = col_character(), Time = col_character()))
+```
+
+**Source:** *Significant Earthquakes, 1965--2016* (USGS earthquake database, distributed on Kaggle: kaggle.com/datasets/usgs/earthquake-database; original catalogue at earthquake.usgs.gov). The file is in the project repository (github.com/chaithanyakumarreddy57-spec/Global-Earthquake-Risk-Analytics) as `data/raw/database.csv`.
+
+**Size:** `r format(nrow(raw), big.mark = ",")` rows and `r ncol(raw)` columns, covering earthquakes of magnitude `r min(raw$Magnitude)` to `r max(raw$Magnitude)` from 1965 to 2016. **Important variables:** `Date`, `Time`, `Latitude`, `Longitude`, `Depth` (km), `Magnitude`, `Magnitude Type`, `Type` (earthquake, nuclear explosion, explosion, rock burst) and `Status` (automatic or reviewed).
+
+**Why it is suitable:** it is a real, global, well-documented catalogue with exactly the variables a severity analysis needs (where, when, how large, how deep), enough records for clustering and machine learning, and mostly complete core columns (no missing values in date, location, depth or magnitude).
+
+# Data preparation
+
+The code below runs when the report is knitted. It follows the cleaning steps of `earthquake_analysis.R` (Phases 3, 4 and 7) and ends with a check against the saved clean dataset.
+
+```{r prep, echo = TRUE}
+eq <- raw
+# snake_case names (the full script uses janitor::clean_names(), same result)
+names(eq) <- tolower(gsub("[^A-Za-z0-9]+", "_", names(eq)))
+
+# 1. Duplicates: none found, distinct() is a safeguard
+n_dup <- sum(duplicated(eq));  eq <- distinct(eq)
+
+# 2. Missing values: drop columns with > 60% missing, then fill the rest
+miss_pct <- colMeans(is.na(eq)) * 100
+dropped  <- names(eq)[miss_pct > 60]
+eq <- eq[, miss_pct <= 60]
+eq$magnitude_type[is.na(eq$magnitude_type)] <- "Unknown"
+eq$root_mean_square[is.na(eq$root_mean_square)] <- median(eq$root_mean_square, na.rm = TRUE)
+
+# 3. Incorrect values: keep natural earthquakes only, depth >= 0, valid coordinates
+n_before <- nrow(eq)
+eq <- eq %>%
+  filter(type == "Earthquake") %>%
+  mutate(depth = pmax(depth, 0)) %>%                    # 3 depths were slightly negative
+  filter(between(latitude, -90, 90), between(longitude, -180, 180))
+
+# 4. Data types: 3 rows hold ISO timestamps, the rest are MM/DD/YYYY + HH:MM:SS
+iso <- str_detect(eq$date, "T")
+eq$datetime <- as.POSIXct(NA, tz = "UTC")
+eq$datetime[iso]  <- ymd_hms(eq$date[iso], tz = "UTC")
+eq$datetime[!iso] <- mdy_hms(paste(eq$date[!iso], eq$time[!iso]), tz = "UTC")
+
+# 5. Transformations: time parts and categories
+eq <- eq %>% mutate(
+  year = year(datetime), month = month(datetime), hour = hour(datetime),
+  depth_category = cut(depth, c(-Inf, 70, 300, Inf), right = FALSE,
+                       labels = c("Shallow", "Intermediate", "Deep")))
+
+# 6. Risk score (0-100): 60% magnitude energy + 40% shallowness (depth capped at 300 km)
+mag_norm   <- (eq$magnitude - 5.5) / (max(eq$magnitude) - 5.5)
+depth_norm <- 1 - pmin(eq$depth, 300) / 300
+eq$risk_score <- round(100 * (0.6 * mag_norm + 0.4 * depth_norm), 2)
+eq$risk_level <- cut(eq$risk_score, c(-Inf, 30, 42, 55, Inf),
+                     labels = c("Low", "Moderate", "High", "Severe"))
+```
+
+```{r prep-check}
+saved <- readRDS(P("data", "processed", "earthquakes_clean.rds"))
+ok <- nrow(eq) == nrow(saved) &&
+  isTRUE(all.equal(eq$risk_score, saved$risk_score)) &&
+  all(as.character(eq$risk_level) == as.character(saved$risk_level))
+stopifnot(ok)                      # the report stops if it ever disagrees with the saved data
+n_removed <- n_before - nrow(eq)
 nonq <- raw %>% count(Type) %>% filter(Type != "Earthquake")
 ```
 
-\begin{titlepage}
-\thispagestyle{empty}
-\centering
-\vspace*{1.2cm}
-{\large\scshape Chaitanya Bharathi Institute of Technology (CBIT), Hyderabad\par}
-\vspace{0.3cm}
-{\normalsize Department of Artificial Intelligence and Data Science\par}
-\vspace{2.2cm}
-{\Huge\bfseries Global Earthquake Risk Analytics\\[0.25cm] using R\par}
-\vspace{0.8cm}
-{\large Exploratory analysis, risk scoring, clustering, machine learning\\and an interactive Shiny dashboard\par}
-\vspace{2.8cm}
-{\large Case study report\par}
-\vspace{0.3cm}
-{\normalsize B.E. (Artificial Intelligence and Data Science)\par}
-\vspace{2.2cm}
-{\Large\bfseries C Chaitanya Kumar Reddy\par}
-\vspace{0.2cm}
-{\large Roll No. 160124771035\par}
-\vfill
-{\normalsize `r format(Sys.Date(), "%B %Y")`\par}
-\vspace{0.3cm}
-{\small Source code and data: \url{https://github.com/chaithanyakumarreddy57-spec/Global-Earthquake-Risk-Analytics}\par}
-\end{titlepage}
+**Result.** `r n_dup` duplicate rows were found; `r length(dropped)` columns with more than 60% missing values were dropped (`r paste(dropped, collapse = ", ")`); `r n_removed` non-earthquake records (`r paste(nonq$n, tolower(nonq$Type), collapse = ", ")`) were removed. The cleaned dataset has **`r format(nrow(eq), big.mark = ",")` earthquakes**. The check above confirms that the rows and risk scores computed here are identical to the saved file `data/processed/earthquakes_clean.rds` used by every other part of the project.
 
-\pagenumbering{roman}
+# Data analysis and visualization
 
-# Abstract {-}
+## Magnitude, depth and time
 
-This case study analyses `r comma(n)` natural earthquakes of magnitude 5.5 and above recorded worldwide between `r min(eq$year)` and `r max(eq$year)`, using R. After cleaning the catalogue (`r comma(n_raw)` raw records, from which `r n_removed` explosions and rock bursts were removed), the study explores magnitude, depth, time and geography, defines a transparent 0--100 *risk score* that combines magnitude (60%) and shallowness (40%), and groups the earthquakes into four risk levels. About `r pct(n_high / n)` of the events fall in the High or Severe levels. K-means clustering with six clusters is applied to position, depth and magnitude, and three classifiers (logistic regression, decision tree, random forest) are trained to recognise High/Severe events from location, time and catalogue information, without using magnitude or depth directly. The random forest performed best on the held-out test set (accuracy `r f2(best$accuracy)`, F1 `r f2(best$f1)`, AUC `r f2(best$auc)`), but the margin over a majority-class baseline (`r f2(baseline_acc)` accuracy) is modest, which is discussed openly in the limitations. The results are presented in an interactive Shiny dashboard. All code, data and outputs are in the public GitHub repository.
-
-\bigskip
-**Keywords:** earthquakes, risk scoring, K-means, random forest, R, Shiny.
-
-\newpage
-\tableofcontents
-\newpage
-\pagenumbering{arabic}
-
-# Introduction and problem statement
-
-Earthquakes are among the most damaging natural hazards. Their effects depend on how large an event is, how deep it occurs, and where it happens. Large, shallow earthquakes release energy close to the surface and are generally the most dangerous. Decision makers and students who want to understand global patterns need a clear way to explore large catalogues of events and to rank them by potential severity.
-
-This project turns a public catalogue of significant earthquakes into an understandable picture of global seismic activity. It asks four questions:
-
-1. Where and when do significant earthquakes occur, and how are their magnitude and depth distributed?
-2. Can magnitude and depth be combined into a simple, explainable severity score?
-3. Do earthquakes fall into natural groups?
-4. How well can machine-learning models recognise High/Severe events from location, time and catalogue information alone?
-
-**Scope.** The score and models describe and classify *recorded events*. They are not a forecast of future earthquakes and they do not account for population, buildings or local geology, so they do not measure human or economic risk.
-
-# Objectives and dataset
-
-## Objectives
-
-- Clean and document a global earthquake catalogue reproducibly in R.
-- Explore magnitude, depth, temporal and geographic patterns.
-- Define a risk score and four risk categories, and map them.
-- Cluster earthquakes with K-means and interpret the groups.
-- Train and compare three classification models with appropriate metrics.
-- Deliver an interactive Shiny dashboard and a reproducible public repository.
-
-## Dataset
-
-The raw file `data/raw/database.csv` contains `r comma(n_raw)` records and `r p_raw` columns with earthquakes of magnitude 5.5 or higher from January 1965 to December 2016. Its structure matches the publicly available *Significant Earthquakes, 1965--2016* dataset (USGS catalogue, distributed on Kaggle). The original source link is given in the README and the references. Important variables are listed in Table \ref{tab:vars}.
-
-```{r vars-chunk}
-vars <- tibble(
-  Variable = c("Date, Time", "Latitude, Longitude", "Depth", "Magnitude",
-               "Magnitude Type", "Type", "Status", "ID, Source, ..."),
-  Meaning = c("Date and UTC time of the event",
-              "Epicentre in decimal degrees",
-              "Depth of the focus in km",
-              "Earthquake magnitude (5.5 to 9.1)",
-              "Scale used (e.g. MW, MB, MS)",
-              "Earthquake, Nuclear Explosion, Explosion, Rock Burst",
-              "Automatic or Reviewed solution",
-              "Catalogue identifiers and data sources"))
-kable(vars, booktabs = TRUE, longtable = FALSE, caption = "Main variables of the raw dataset. \\label{tab:vars}") %>%
-  kable_styling(latex_options = "HOLD_position", font_size = 9) %>%
-  column_spec(2, width = "9cm")
+```{r fig-md, echo = TRUE, fig.height = 2.5, fig.cap = "Distribution of magnitude (left) and depth (right)."}
+p1 <- ggplot(eq, aes(magnitude)) +
+  geom_histogram(binwidth = 0.1, fill = "firebrick", colour = "white") +
+  labs(title = "Magnitude distribution", x = "Magnitude", y = "Number of earthquakes")
+p2 <- ggplot(eq, aes(depth)) +
+  geom_histogram(bins = 60, fill = "steelblue", colour = "white") +
+  labs(title = "Depth distribution", x = "Depth (km)", y = "Number of earthquakes")
+p1 + p2 & theme_minimal(base_size = 9)
 ```
 
-# Methodology and workflow
+Magnitudes are strongly right-skewed: the median is `r f2(median(eq$magnitude))` and only `r pct(mean(eq$magnitude >= 7))` of events reach magnitude 7 or more (`r sum(eq$magnitude >= 8)` reach 8 or more). Most earthquakes are shallow: `r pct(mean(eq$depth < 70))` occur above 70 km (median depth `r median(eq$depth)` km), and a small group lies deeper than 300 km. Magnitude and depth are almost uncorrelated (Spearman $\rho$ = `r f3(cor(eq$magnitude, eq$depth, method = "spearman"))`), so both are needed in the risk score.
 
-The pipeline in `earthquake_analysis.R` runs from top to bottom and writes every table, figure and model used in this report. Figure \ref{fig:flow} shows the workflow.
-
-```{r flow-tikz, results='asis'}
-cat("\\begin{figure}[H]\\centering
-\\begin{tikzpicture}[node distance=0.55cm, box/.style={draw, rounded corners, fill=blue!6, minimum width=2.9cm, minimum height=1.05cm, align=center, font=\\small}, arr/.style={-{Stealth[length=2.2mm]}, thick}]
-\\node[box] (a) {Raw catalogue\\\\(23,412 rows)};
-\\node[box, right=of a] (b) {Cleaning \\&\\\\preprocessing};
-\\node[box, right=of b] (c) {Exploratory\\\\analysis};
-\\node[box, below=0.9cm of c] (d) {Risk score\\\\and levels};
-\\node[box, left=of d] (e) {K-means\\\\clustering};
-\\node[box, left=of e] (f) {Classification\\\\models};
-\\node[box, below=0.9cm of f] (g) {Evaluation\\\\(metrics, ROC)};
-\\node[box, right=of g] (h) {Saved tables,\\\\plots, data};
-\\node[box, right=of h] (i) {Shiny dashboard\\\\and report};
-\\draw[arr] (a)--(b); \\draw[arr] (b)--(c); \\draw[arr] (c)--(d); \\draw[arr] (d)--(e); \\draw[arr] (e)--(f);
-\\draw[arr] (f)--(g); \\draw[arr] (g)--(h); \\draw[arr] (h)--(i);
-\\end{tikzpicture}
-\\caption{Project workflow from raw data to dashboard and report.\\label{fig:flow}}
-\\end{figure}\n")
+```{r fig-year, echo = TRUE, fig.height = 2.3, fig.cap = "Number of earthquakes per year, 1965-2016."}
+yearly <- count(eq, year)
+ggplot(yearly, aes(year, n)) +
+  geom_line(colour = "firebrick") + geom_point(size = 1) +
+  labs(title = "Earthquakes per year", x = "Year", y = "Number of earthquakes") +
+  theme_minimal(base_size = 9)
 ```
 
-The main R packages are `tidyverse`, `lubridate`, `janitor`, `ggplot2`, `leaflet`, `maps`, `caret`, `rpart`, `randomForest`, `pROC`, `cluster`, `factoextra`, `shiny`, `bslib`, `plotly` and `DT`. A random seed (`set.seed(42)`) is set at the start of the analysis.
-
-# Data cleaning and preprocessing
-
-The cleaning steps and what they changed are summarised in Table \ref{tab:clean}.
-
-```{r clean-chunk}
-high_miss <- miss %>% filter(pct_missing > 60)
-steps <- tibble(
-  Step = c("Column names", "Duplicates",
-           "Non-earthquake events", "Columns with >60% missing",
-           "Remaining missing values", "Negative depths",
-           "Date and time", "Outliers"),
-  Action = c("Converted to snake_case with janitor",
-             sprintf("%d duplicate rows and %d duplicate IDs found; none removed",
-                     sum(duplicated(raw)), sum(duplicated(raw$ID))),
-             sprintf("%d records removed (%s)", n_removed,
-                     paste(sprintf("%d %s", nonq$n, tolower(nonq$Type)), collapse = ", ")),
-             sprintf("%d columns dropped (%s)", nrow(high_miss),
-                     paste(high_miss$column, collapse = ", ")),
-             "Magnitude type: 3 missing set to 'Unknown'; root-mean-square error filled with the median",
-             sprintf("%d negative depths (minimum %.1f km) set to 0 km", sum(raw$Depth < 0, na.rm = TRUE), min(raw$Depth)),
-             sprintf("%d rows stored as ISO timestamps parsed separately; all dates parsed", sum(grepl("T", raw$Date))),
-             sprintf("IQR rule flags %s magnitude and %s depth values; kept because large and deep events are real",
-                     comma(iqr_out(eq$magnitude)), comma(iqr_out(eq$depth)))))
-kable(steps, booktabs = TRUE, longtable = FALSE, caption = "Data cleaning steps and their effect. \\label{tab:clean}") %>%
-  kable_styling(latex_options = "HOLD_position", font_size = 9) %>%
-  column_spec(1, width = "3.6cm") %>% column_spec(2, width = "11cm")
+```{r trend}
+tr <- summary(lm(n ~ year, yearly))$coefficients["year", ]
+busiest <- yearly %>% arrange(desc(n)) %>% slice(1)
 ```
 
-After cleaning the dataset holds `r comma(n)` earthquakes. The following features were then created: year, month, hour; a magnitude category (Moderate 5.5--5.9, Strong 6.0--6.9, Major 7.0--7.9, Great 8.0+); a depth category (Shallow below 70 km, Intermediate 70--300 km, Deep above 300 km); log depth; encoded categories; and z-score scaled latitude, longitude, depth and magnitude. Rare magnitude types were grouped into "Other" so that train and test sets never contain unseen levels. The final cleaned file has `r ncol(eq)` columns, including the risk score, risk level, region and cluster added later in the pipeline.
+The yearly count rises by about `r f2(tr[1])` events per year (p `r ifelse(tr[4] < 0.001, "< 0.001", paste("=", f3(tr[4])))`). This is probably influenced by improving detection and reporting rather than a real rise in activity. The busiest year is `r busiest$year` (`r busiest$n` events), when the magnitude 9.1 Tohoku earthquake in Japan and its aftershocks occurred.
 
-# Exploratory data analysis
-
-## Magnitude and depth
-
-```{r f-mag, fig.cap="Distribution of earthquake magnitude (bin width 0.1)."}
-include_graphics(fig("25_magnitude_distribution.png"))
-```
-
-Magnitudes are strongly right-skewed (histogram above). The median magnitude is `r f2(median(eq$magnitude))` and the mean `r f2(mean(eq$magnitude))`. Because the dataset starts at 5.5, the count falls quickly with magnitude. Only `r pct(mean(eq$magnitude >= 7))` of events reach magnitude 7 or more, and `r sum(eq$magnitude >= 8)` reach magnitude 8 or more.
-
-```{r f-depth, fig.cap="Distribution of earthquake depth (km)."}
-include_graphics(fig("26_depth_distribution.png"))
-```
-
-Most earthquakes are shallow: `r pct(mean(eq$depth < 70))` occur above 70 km and the median depth is `r median(eq$depth)` km. A smaller group lies in the intermediate range, and `r comma(sum(eq$depth > 300))` events are deeper than 300 km (histogram above).
-
-```{r f-magdepth, fig.cap="Magnitude against depth, with a linear trend line."}
-include_graphics(fig("31_magnitude_vs_depth.png"))
-```
-
-The scatter plot above shows almost no relationship between depth and magnitude. The Spearman correlation is `r f3(unname(sp$estimate))` (p = `r format.pval(sp$p.value, digits = 2)`). With so many observations even a very small correlation is statistically detectable, but it is practically negligible. A Kruskal--Wallis test finds a small but statistically significant difference in magnitude between depth categories (p = `r format.pval(kw$p.value, digits = 2)`).
-
-## Correlation
-
-```{r f-cor, out.width="62%", fig.cap="Correlation matrix of latitude, longitude, depth, magnitude, year, month and hour."}
-include_graphics(fig("34_correlation.png"))
-```
-
-The correlations between the numeric variables are all weak (matrix above). This tells us that magnitude and depth carry largely independent information, which is why both are needed in the risk score.
-
-# Geographic and temporal analysis
-
-## Temporal patterns
-
-```{r f-year, fig.cap="Number of earthquakes per year, 1965--2016."}
-include_graphics(fig("27_earthquakes_by_year.png"))
-```
-
-The yearly count rises from the late 1960s to the 2000s (line chart above). A linear fit gives an increase of about `r f2(trend_b)` events per year (p = `r format.pval(trend_p, digits = 2)`). This should **not** be read as a real increase in seismic activity. Global catalogues become more complete and magnitudes are measured more consistently over time, so part of the rise is likely an artefact of detection and reporting. The busiest year is `r busiest$year` with `r busiest$n` events. `r sum(eq$year == 2011 & eq$latitude > 34 & eq$latitude < 42 & eq$longitude > 138 & eq$longitude < 146 & eq$datetime >= as.POSIXct("2011-03-11 05:46", tz = "UTC"))` of the `r sum(eq$year == 2011)` events in 2011 lie in a box around north-east Japan on or after 11 March 2011, which is consistent with the aftershock sequence of the magnitude 9.1 Tohoku earthquake.
-
-```{r f-month, results="asis"}
-two_fig(fig("28_earthquakes_by_month.png"), fig("29_earthquakes_by_hour.png"),
-        "Earthquakes by calendar month (left) and by hour of day in UTC (right).", "fig:monthhour")
-```
-
-Counts by month and hour are fairly flat (bar charts above). A chi-square test rejects a perfectly uniform monthly distribution (p = `r format.pval(chi_m$p.value, digits = 2)`), but the test ignores month length and the fact that aftershocks are not independent events, so the small differences should not be interpreted as a seasonal effect. There is no physical reason for a daily cycle, and none is visible.
-
-## Geographic patterns
-
-```{r f-glob, fig.cap="Epicentres of all earthquakes in the cleaned dataset."}
-include_graphics(fig("36_global_locations.png"))
-```
-
-The map above traces the plate boundaries: the Pacific "Ring of Fire", the Alpide belt from the Mediterranean to the Himalaya and Indonesia, and the mid-ocean ridges. Earthquakes are far from evenly spread over the globe.
-
-```{r f-grid, fig.cap="Earthquake counts in 10 x 10 degree grid cells (darker means more events)."}
-include_graphics(fig("38_density_grid.png"))
-```
-
-```{r grid-tbl}
-g <- grid %>% slice_head(n = 8) %>%
-  transmute(`Latitude band` = sprintf("%d to %d", lat_bin, lat_bin + 10),
-            `Longitude band` = sprintf("%d to %d", lon_bin, lon_bin + 10),
-            Earthquakes = n, `Mean magnitude` = round(mean_mag, 2), `Max magnitude` = max_mag)
-kable(g, booktabs = TRUE, longtable = FALSE, caption = "The eight most active 10 x 10 degree cells. \\label{tab:grid}") %>%
-  kable_styling(latex_options = "HOLD_position", font_size = 9)
-```
-
-Table \ref{tab:grid} confirms that the most active cells lie in the south-west and western Pacific, and that the busiest cell holds `r comma(grid$n[1])` events. Cell boundaries are arbitrary and not equal in area, so counts are only a rough guide to relative activity.
-
-## The strongest earthquakes
-
-```{r top-tbl}
-t <- top20 %>% slice_head(n = 10) %>%
-  transmute(`Date (UTC)` = substr(datetime, 1, 10), Latitude = round(latitude, 2), Longitude = round(longitude, 2),
-            Magnitude = magnitude, `Depth (km)` = depth, `Risk level` = risk_level)
-kable(t, booktabs = TRUE, longtable = FALSE, caption = "The ten strongest earthquakes in the dataset. \\label{tab:top}") %>%
-  kable_styling(latex_options = "HOLD_position", font_size = 9)
-```
-
-Table \ref{tab:top} lists the largest events. All of the ten strongest events are classed Severe or High, which follows directly from the way the score is built.
-
-# Risk score and risk categories
-
-## Definition
-
-Each earthquake receives a score from 0 to 100:
-
-$$\text{risk score} = 100\times\left(0.6\times\frac{M-5.5}{M_{max}-5.5} + 0.4\times\left(1-\frac{\min(D,300)}{300}\right)\right)$$
-
-where $M$ is the magnitude, $M_{max}$ the largest magnitude in the data and $D$ the depth in km. Magnitude receives the larger weight (60%) because it measures the energy released. Shallowness receives 40% because shallow events usually shake the surface more strongly. Depth beyond 300 km is capped. The weights are a design choice made by the author for this study, not values derived from engineering data, and other reasonable weights would give different rankings.
-
-Scores are grouped into four levels: **Low** (score up to 30), **Moderate** (above 30 to 42), **High** (above 42 to 55) and **Severe** (above 55).
+## Geographic distribution and risk levels
 
 ```{r risk-tbl}
-rt <- eq %>% count(risk_level) %>% mutate(Share = pct(n / sum(n)), `Mean magnitude` = NA_real_, `Mean depth (km)` = NA_real_)
-rt$`Mean magnitude`  <- sapply(rt$risk_level, function(l) round(mean(eq$magnitude[eq$risk_level == l]), 2))
-rt$`Mean depth (km)` <- sapply(rt$risk_level, function(l) round(mean(eq$depth[eq$risk_level == l]), 1))
-rt <- rt %>% rename(`Risk level` = risk_level, Earthquakes = n) %>% mutate(Earthquakes = comma(Earthquakes))
-kable(rt, booktabs = TRUE, longtable = FALSE, caption = "Earthquakes by risk level. \\label{tab:risk}") %>%
-  kable_styling(latex_options = "HOLD_position", font_size = 9)
+rt <- eq %>% count(risk_level) %>%
+  mutate(Share = pct(n / sum(n)),
+         `Mean magnitude` = round(tapply(eq$magnitude, eq$risk_level, mean), 2),
+         `Mean depth (km)` = round(tapply(eq$depth, eq$risk_level, mean), 1)) %>%
+  rename(`Risk level` = risk_level, Earthquakes = n) %>%
+  mutate(Earthquakes = comma(Earthquakes))
+kable(rt, format = "latex", booktabs = TRUE, longtable = FALSE, linesep = rep("", 5),
+      caption = "Earthquakes by risk level (Low: score up to 30; Moderate: to 42; High: to 55; Severe: above 55).") %>%
+  kable_styling(latex_options = "HOLD_position", font_size = 8.5)
 ```
 
-```{r f-risk, fig.cap="Number of earthquakes in each risk level."}
-include_graphics(fig("43_risk_distribution.png"))
-```
-
-Moderate is the largest level (`r pct(mean(eq$risk_level == "Moderate"))`), followed by High (`r pct(mean(eq$risk_level == "High"))`). Severe events are rare (`r pct(mean(eq$risk_level == "Severe"))`, `r comma(sum(eq$risk_level == "Severe"))` events). No Low event is shallow: of `r comma(sum(eq$risk_level == "Low"))` Low events, `r comma(sum(eq$risk_level == "Low" & eq$depth >= 70 & eq$depth <= 300))` are at intermediate depth (70--300 km) and `r comma(sum(eq$risk_level == "Low" & eq$depth > 300))` are deeper than 300 km. A chi-square test confirms that risk level and depth category are strongly related (p `r ifelse(chi_rd$p.value < 2.2e-16, "< 2.2e-16", paste("=", format.pval(chi_rd$p.value, digits = 2)))`), which is expected because depth is part of the score.
-
-```{r f-riskmap, fig.cap="Earthquakes coloured by risk level; Severe events are drawn on top."}
+```{r f-map, out.width = "88%", fig.cap = "Epicentres coloured by risk level (Severe events drawn on top)."}
 include_graphics(fig("67_risk_map.png"))
 ```
 
-Severe and High events concentrate along subduction zones of the western and south-western Pacific and the South American coast (map above).
+Earthquakes follow the plate boundaries: the Pacific "Ring of Fire", the Alpine--Himalayan belt and the mid-ocean ridges. Moderate is the largest level (`r pct(mean(eq$risk_level == "Moderate"))`); `r pct(mean(eq$risk_level %in% c("High", "Severe")))` of events are High or Severe, and these concentrate along the subduction zones of the western Pacific and the South American coast. Low-risk events are all deeper than 70 km, because shallowness is part of the score. The most active 10$^\circ$ x 10$^\circ$ cell (20$^\circ$S--10$^\circ$S, 160$^\circ$E--170$^\circ$E, near Vanuatu) holds `r comma(read_csv(P("outputs","tables","grid_cells.csv"), show_col_types = FALSE)$n[1])` events.
 
-## Risk by region and over time
+## Clustering
 
-```{r f-regrisk, out.width="80%", fig.cap="Mean risk score by region."}
-include_graphics(fig("44_risk_by_region.png"))
+```{r cl}
+cl <- read_csv(P("outputs", "tables", "cluster_profile.csv"), show_col_types = FALSE)
+cl %>% transmute(Cluster = cluster, Earthquakes = comma(n), `Mean magnitude` = round(mean_mag, 2),
+                 `Mean depth (km)` = round(mean_depth, 1), `Mean risk score` = round(mean_risk, 1)) %>%
+  kable(format = "latex", booktabs = TRUE, longtable = FALSE, linesep = rep("", 5), caption = "K-means cluster profile (k = 6).") %>%
+  kable_styling(latex_options = "HOLD_position", font_size = 8.5)
 ```
 
-```{r reg-tbl}
-rg <- reg %>% transmute(Region = region, Earthquakes = comma(n), `Mean risk` = round(mean_risk, 1), `% High/Severe` = round(pct_high_severe, 1))
-kable(rg, booktabs = TRUE, longtable = FALSE, caption = "Risk summary by region. Regions are rough latitude--longitude boxes. \\label{tab:reg}") %>%
-  kable_styling(latex_options = "HOLD_position", font_size = 9)
+K-means (`nstart = 25`) was run on latitude and longitude converted to 3-D coordinates on the globe (so longitude wraps correctly), log depth and magnitude, all standardised. The clusters differ mainly by depth and magnitude: cluster `r cl$cluster[which.max(cl$mean_depth)]` holds the deep events (mean depth `r round(max(cl$mean_depth))` km, lowest risk), cluster `r cl$cluster[which.max(cl$mean_mag)]` the largest events (mean magnitude `r f2(max(cl$mean_mag))`, highest risk) and cluster `r cl$cluster[which.min(cl$mean_depth)]` the shallowest. **Caution:** the elbow plot has no sharp bend and the silhouette width is highest at k = 2 (about 0.32, against 0.25 at k = 6), so k = 6 is a descriptive choice, not a strongly supported one.
+
+# Prediction model
+
+**Task.** Classify an event as **High/Severe** (the positive class, `r pct(mean(eq$risk_level %in% c("High","Severe")))` of events) or Low/Moderate. **Why these methods.** Logistic regression is a simple, interpretable baseline; a decision tree gives readable rules; a random forest combines many trees and can capture non-linear interactions between location and time, so it is a natural candidate when location drives the pattern. All three are compared on the same held-out test set. Magnitude and depth are **excluded** from the inputs because they define the risk score (using them would be data leakage); the inputs are latitude, longitude, year, month, hour, review status and magnitude type.
+
+\Needspace{20\baselineskip}
+
+```{r model-code, echo = TRUE, eval = FALSE}
+# Abbreviated from earthquake_analysis.R (Phases 8B and 9); not re-run here so that the
+# results below are exactly the ones saved in outputs/tables/model_comparison.csv
+model_df <- eq %>% transmute(
+  high_risk = factor(ifelse(risk_level %in% c("High", "Severe"), "High", "NotHigh"),
+                     levels = c("High", "NotHigh")),
+  latitude, longitude, year, month, hour, status_code, magnitude_type)
+idx   <- caret::createDataPartition(model_df$high_risk, p = 0.8, list = FALSE)  # stratified 80/20
+train <- model_df[idx, ];  test <- model_df[-idx, ]
+glm_fit  <- glm(high_risk ~ ., data = train, family = binomial)
+tree_fit <- rpart::rpart(high_risk ~ ., data = train, method = "class", cp = 0.005)
+rf_fit   <- randomForest::randomForest(high_risk ~ ., data = train, ntree = 300, importance = TRUE)
+# accuracy, precision, recall, F1: caret::confusionMatrix();  AUC and ROC: pROC::roc()
 ```
 
-Table \ref{tab:reg} shows only modest differences in mean score between regions (from `r f2(min(reg$mean_risk))` to `r f2(max(reg$mean_risk))`). The regions are crude bounding boxes defined in the script and the "Other / Ocean ridges" group is a catch-all, so this table is a first look rather than a tectonic classification.
-
-```{r f-riskyear, fig.cap="Mean risk score per year with a smoothed trend."}
-include_graphics(fig("45_risk_over_time.png"))
+```{r cmp}
+cmp <- read_csv(P("outputs", "tables", "model_comparison.csv"), show_col_types = FALSE)
+imp <- read_csv(P("outputs", "tables", "feature_importance.csv"), show_col_types = FALSE)
+best <- cmp %>% arrange(desc(f1), desc(auc)) %>% slice(1)
+base_acc <- mean(!(eq$risk_level %in% c("High", "Severe")))
+cmp %>% mutate(across(-model, ~ round(.x, 3))) %>%
+  rename(Model = model, Accuracy = accuracy, Precision = precision, Recall = recall, F1 = f1, AUC = auc) %>%
+  kable(format = "latex", booktabs = TRUE, longtable = FALSE, linesep = rep("", 5),
+        caption = "Test-set results (positive class = High/Severe; about 4,650 test earthquakes).") %>%
+  kable_styling(latex_options = "HOLD_position", font_size = 8.5)
 ```
 
-# Clustering analysis
-
-K-means was applied to five variables: latitude and longitude converted to three coordinates on a unit sphere (so that longitude wraps correctly at $\pm 180^\circ$), the standardised log depth and the standardised magnitude. The elbow and silhouette methods were run on a random sample of 4,000 earthquakes (plots below).
-
-```{r f-k, results="asis"}
-two_fig(fig("49_elbow.png"), fig("49_silhouette.png"),
-        "Elbow method (left) and average silhouette width (right) for k = 1 to 10.", "fig:kdiag")
+```{r f-roc, results = "asis"}
+two_fig(fig("62_roc_curves.png"), fig("65_feature_importance.png"),
+        "ROC curves of the three models (left) and random forest feature importance (right).")
 ```
 
-The elbow curve decreases smoothly and has no sharp bend. The average silhouette width is highest for k = 2 (about 0.32); for k = 6 it is about 0.25. The analysis uses **k = 6** as a pragmatic choice that yields more detailed groups, but the diagnostics do not single out six clusters, so the clusters should be seen as a descriptive grouping rather than as natural, well separated classes.
+# Results
 
-```{r cl-tbl}
-ct <- cl %>% transmute(Cluster = cluster, Earthquakes = comma(n), `Mean magnitude` = round(mean_mag, 2),
-                       `Mean depth (km)` = round(mean_depth, 1), `Mean risk score` = round(mean_risk, 1))
-kable(ct, booktabs = TRUE, longtable = FALSE, caption = "Cluster profile (K-means, k = 6). \\label{tab:cl}") %>%
-  kable_styling(latex_options = "HOLD_position", font_size = 9)
-```
-
-Table \ref{tab:cl} shows that the clusters differ mainly by depth and magnitude. Cluster `r cl$cluster[which.max(cl$mean_depth)]` collects the deep events (mean depth `r round(max(cl$mean_depth))` km, lowest mean risk `r round(min(cl$mean_risk), 1)`), cluster `r cl$cluster[which.max(cl$mean_mag)]` the large events (mean magnitude `r f2(max(cl$mean_mag))`, highest mean risk `r round(max(cl$mean_risk), 1)`), and cluster `r cl$cluster[which.min(cl$mean_depth)]` the shallowest events (mean depth `r round(min(cl$mean_depth), 1)` km). The mean latitude and longitude of a cluster are not meaningful locations because several clusters are spread across the whole globe.
-
-```{r f-km, fig.cap="K-means clusters (k = 6) on a world map."}
-include_graphics(fig("50_kmeans_map.png"))
-```
-
-In the map above the clusters overlap strongly in space along the plate boundaries because depth and magnitude, not only position, drive the grouping. The one visible regional pattern is that events along the western coast of the Americas and the Caribbean are largely assigned to a single cluster (cluster 2).
-
-# Machine-learning models and evaluation
-
-## Setup
-
-The goal is a binary classification: is an earthquake **High/Severe** (the positive class, `r pct(n_high / n)` of the data) or **Low/Moderate**? Magnitude and depth were deliberately *excluded* from the inputs because they define the risk score, and including them would make the task trivial (data leakage). The models therefore use latitude, longitude, year, month, hour, review status and magnitude type. The data were split 80/20 with stratification (about 4,650 test earthquakes). Three models were trained: logistic regression, a decision tree (`rpart`, cp = 0.005) and a random forest (300 trees). Because the classes are imbalanced, accuracy alone is misleading: a model that always predicts Low/Moderate would reach an accuracy of `r f2(baseline_acc)`.
-
-## Results
-
-```{r cmp-tbl}
-ct <- cmp %>% mutate(across(-model, ~ round(.x, 3))) %>%
-  rename(Model = model, Accuracy = accuracy, Precision = precision, Recall = recall, F1 = f1, AUC = auc)
-kable(ct, booktabs = TRUE, longtable = FALSE, caption = "Test-set performance. The positive class is High/Severe. \\label{tab:cmp}") %>%
-  kable_styling(latex_options = "HOLD_position", font_size = 9)
-```
-
-```{r f-cmp, fig.cap="Model comparison on the test set."}
-include_graphics(fig("66_model_comparison.png"))
-```
-
-```{r f-roc, out.width="70%", fig.cap="ROC curves of the three models on the test set."}
-include_graphics(fig("62_roc_curves.png"))
-```
-
-The random forest is the best model on every metric (Table \ref{tab:cmp} and the two figures above): accuracy `r f3(best$accuracy)`, precision `r f3(best$precision)`, recall `r f3(best$recall)`, F1 `r f3(best$f1)` and AUC `r f3(best$auc)`. Logistic regression and the decision tree have an accuracy (`r f3(cmp$accuracy[1])` and `r f3(cmp$accuracy[2])`) that is barely above the majority-class baseline of `r f3(baseline_acc)`, and they detect only about `r pct(mean(cmp$recall[1:2]), 0)` of High/Severe events (recall `r f2(cmp$recall[1])` and `r f2(cmp$recall[2])`). The random forest finds about `r pct(best$recall, 0)` of them. In the ROC plot the random forest curve lies above the other two, with an AUC of `r f2(best$auc)`, which indicates moderate ability to rank High/Severe events above others. Overall, location, time and catalogue information carry some, but limited, information about whether an event is High/Severe.
-
-## Decision tree and feature importance
-
-```{r f-tree, out.width="80%", fig.cap="Decision tree (cp = 0.005)."}
-include_graphics(fig("54_decision_tree.png"))
-```
-
-```{r f-imp, out.width="75%", fig.cap="Random forest feature importance (mean decrease in Gini)."}
-include_graphics(fig("65_feature_importance.png"))
-```
-
-```{r imp-tbl}
-it <- imp %>% transmute(Feature = feature, `Mean decrease accuracy` = round(MeanDecreaseAccuracy, 1), `Mean decrease Gini` = round(MeanDecreaseGini, 1))
-kable(it, booktabs = TRUE, longtable = FALSE, caption = "Random forest variable importance. \\label{tab:imp}") %>%
-  kable_styling(latex_options = "HOLD_position", font_size = 9)
-```
-
-Longitude and latitude have the largest Gini importance (figure above and Table \ref{tab:imp}), reflecting that High/Severe events concentrate along particular plate boundaries. `year` and `magnitude_type` are also important. These two describe how an event was catalogued rather than a physical cause: the magnitude scale used is related to the size of an event, and the catalogue changes over the years. They therefore act partly as indirect proxies for magnitude, and the model should not be read as discovering physical drivers of risk.
-
-# Dashboard
-
-The interactive Shiny dashboard (`app.R`) lets a user explore the same cleaned dataset used in this report. It offers:
-
-- **Filters** (sidebar): magnitude, depth, year range, risk level, region and K-means cluster, with a reset button.
-- **Overview:** key figures (count, mean and maximum magnitude, median depth, share of High/Severe events) and interactive magnitude, yearly, depth and magnitude-versus-depth charts.
-- **Risk analysis:** risk-level distribution, mean risk per year and a regional summary table.
-- **Map:** an interactive map coloured by magnitude or by risk level (a random sample of up to 5,000 events is drawn for speed).
-- **Clusters:** a cluster profile table that updates with the filters.
-- **Models:** the saved model-comparison table, the best model and the random forest feature importance (these are fixed results, independent of the filters).
-- **Data:** the filtered records in a searchable table with CSV download.
-- **About:** the risk-score definition and data notes.
-
-When a filter combination matches no earthquakes the app shows a short message instead of an error, and the Models tab shows a notice if the saved result files are missing. The dashboard runs locally with `shiny::runApp()`; the README gives the exact steps and the instructions for publishing it on shinyapps.io. At the time of writing, the public deployment link is listed in the README only once the app has been published and checked.
-
-# Limitations and future work
-
-**Limitations**
-
-- *Descriptive score.* The risk score is a simple formula with weights chosen by the author. It ignores population density, building quality, ground conditions and tsunami potential.
-- *Catalogue effects.* The dataset only contains events of magnitude 5.5 and above, and the rise in yearly counts is probably influenced by improving detection and reporting.
-- *Clusters.* The number of clusters (k = 6) is not strongly supported by the elbow and silhouette diagnostics (best silhouette at k = 2).
-- *Model skill and indirect leakage.* The classifiers are only moderately better than the baseline, and inputs such as `year` and `magnitude_type` act partly as proxies for magnitude. The models classify recorded events; they do not predict future earthquakes.
-- *Sensitivity of results.* A repeat run of the pipeline in a different R environment (R 4.3.3) reproduced the data cleaning, the risk-level counts and the Spearman correlation exactly, and gave the same ranking of models (random forest best, F1 about 0.43, AUC about 0.72). However, random steps (data split, clustering) gave different values, and in that run the decision tree collapsed to a single node. The decision-tree results in this report should therefore be treated as sensitive to the random split, and a repeated or cross-validated evaluation would be more reliable.
-- *Missing outputs.* The original run did not save confusion matrices. The updated analysis script now writes them to `outputs/tables/confusion_matrices.csv` and `outputs/plots/63_confusion_matrices.png`; they are not shown here because they were not part of the run that produced the reported metrics.
-- *Regions.* The region labels are coarse latitude--longitude boxes.
-
-**Future work**
-
-- Use cross-validation and a fixed training/test partition saved to disk so that all metrics are reproducible exactly.
-- Tune the models and compare against gradient boosting; handle class imbalance (for example class weights or threshold tuning).
-- Choose the number of clusters with more care, and test density-based clustering such as DBSCAN on the sphere.
-- Add plate-boundary and population data to build a more realistic exposure-based risk measure.
-- Publish the dashboard and add screenshots to the repository.
+The **random forest is the best model on every measure**: accuracy `r f3(best$accuracy)`, precision `r f3(best$precision)`, recall `r f3(best$recall)`, F1 `r f3(best$f1)` and AUC `r f3(best$auc)`. Logistic regression and the decision tree barely beat a model that always predicts "not High/Severe" (accuracy `r f3(base_acc)`) and find only about 11% of High/Severe events (recall `r f2(cmp$recall[1])` and `r f2(cmp$recall[2])`); the random forest finds about `r pct(best$recall, 0)`. Its ROC curve lies above the others (AUC `r f2(best$auc)`), a moderate ability to rank High/Severe events higher than others. Longitude and latitude are the most important inputs, which reflects the concentration of severe events along particular plate boundaries; `year` and `magnitude_type` are also important, but they describe how an event was catalogued and act partly as proxies for magnitude, so the model should not be read as finding physical causes.
 
 # Conclusion
 
-Starting from a public catalogue of significant earthquakes, this study cleaned `r comma(n_raw)` raw records to `r comma(n)` natural earthquakes, described their magnitude, depth, temporal and geographic patterns, and built a transparent risk score that places about `r pct(n_high / n)` of events in the High or Severe levels. Most events are shallow (`r pct(mean(eq$depth < 70))` above 70 km) and cluster along plate boundaries, especially in the western and south-western Pacific. K-means grouped events mainly by depth and magnitude, with the caveat that the choice of six clusters is not strongly supported. A random forest recognised High/Severe events best (F1 `r f2(best$f1)`, AUC `r f2(best$auc)`) but only moderately better than a trivial baseline, which shows how much of the risk depends on magnitude and depth themselves. The complete workflow is reproducible from the public repository, and the Shiny dashboard makes the results easy to explore.
+From `r format(nrow(raw), big.mark = ",")` raw records, `r format(nrow(eq), big.mark = ",")` natural earthquakes were analysed. Most are shallow (`r pct(mean(eq$depth < 70))` above 70 km) and lie along plate boundaries, and the explainable risk score places `r pct(mean(eq$risk_level %in% c("High", "Severe")))` of them in the High or Severe levels. A random forest recognised these events better than logistic regression or a decision tree (F1 `r f2(best$f1)`, AUC `r f2(best$auc)`), but only moderately better than a trivial baseline.
+
+**Limitations.** The risk score uses author-chosen weights (60/40) and ignores exposure; the catalogue is limited to magnitude 5.5 and above; k = 6 is weakly supported; and model skill is modest. Random steps (train/test split, clustering) depend on the random-number stream: re-running the pipeline in another R environment reproduced the cleaning, risk-level counts and model ranking, but not the exact metrics, and the decision tree collapsed to a single node. Cross-validation would give more stable figures. An interactive Shiny dashboard (`app.R`) and an extended 21-page report (`report/earthquake_report_extended.pdf`) are in the repository.
 
 # References {-}
 
-1. U.S. Geological Survey. *Earthquake Hazards Program: Search Earthquake Catalog.* \url{https://earthquake.usgs.gov/earthquakes/search/}
-2. *Significant Earthquakes, 1965--2016* (USGS earthquake database), Kaggle dataset. See the README for the link used.
-3. R Core Team. *R: A Language and Environment for Statistical Computing.* R Foundation for Statistical Computing, Vienna. \url{https://www.R-project.org}
+1. U.S. Geological Survey, Earthquake Hazards Program, *Search Earthquake Catalog*. earthquake.usgs.gov/earthquakes/search/
+2. *Significant Earthquakes, 1965--2016* (USGS earthquake database), Kaggle.
+3. R Core Team, *R: A Language and Environment for Statistical Computing*. www.R-project.org
 4. Wickham, H. et al. (2019). Welcome to the tidyverse. *Journal of Open Source Software*, 4(43), 1686.
-5. Chang, W. et al. *shiny: Web Application Framework for R.* \url{https://shiny.posit.co}
-6. Kuhn, M. (2008). Building predictive models in R using the caret package. *Journal of Statistical Software*, 28(5), 1--26.
-7. Breiman, L. (2001). Random forests. *Machine Learning*, 45(1), 5--32.
-8. Hartigan, J. A. and Wong, M. A. (1979). Algorithm AS 136: A K-means clustering algorithm. *Journal of the Royal Statistical Society, Series C*, 28(1), 100--108.
-9. Rousseeuw, P. J. (1987). Silhouettes: a graphical aid to the interpretation and validation of cluster analysis. *Journal of Computational and Applied Mathematics*, 20, 53--65.
-10. Robin, X. et al. (2011). pROC: an open-source package for R and S+ to analyze and compare ROC curves. *BMC Bioinformatics*, 12, 77.
+5. Breiman, L. (2001). Random forests. *Machine Learning*, 45(1), 5--32.
+6. Hartigan, J. A. and Wong, M. A. (1979). A K-means clustering algorithm. *JRSS Series C*, 28(1), 100--108.
+7. Kuhn, M. (2008). Building predictive models in R using the caret package. *Journal of Statistical Software*, 28(5).

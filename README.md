@@ -8,7 +8,7 @@ Exploratory analysis, a transparent risk score, clustering, machine learning and
 
 | | | |
 |---|---|---|
-| **Read** | [Report (PDF)](report/earthquake_report.pdf) | [Report source (R Markdown)](report/earthquake_report.Rmd) |
+| **Read** | [Case-study report (PDF, 6 pages)](report/earthquake_report.pdf) | [Report source (R Markdown)](report/earthquake_report.Rmd) / [Extended report (PDF, 21 pages)](report/earthquake_report_extended.pdf) |
 | **Inspect & reproduce** | [Analysis script](earthquake_analysis.R) | [Dashboard code](app.R) |
 | **Data & results** | [Dataset (raw CSV)](data/raw/database.csv) | [Plots](outputs/plots/) / [Tables](outputs/tables/) / [Interactive map](outputs/maps/earthquake_map.html) |
 | **Interact** | Live dashboard: **not published yet** (see [Run the dashboard](#run-the-dashboard) and [Publish the dashboard](#publish-the-dashboard-public-https-link)) | |
@@ -105,7 +105,7 @@ Magnitude has the larger weight (energy released); shallowness adds 40% because 
 
 ### Clustering
 
-K-means (k = 6, `nstart = 25`) on position on the globe (3-D unit-sphere coordinates), log depth and magnitude. **Caveat:** the elbow plot has no sharp bend and the silhouette width is highest at k = 2 (about 0.32; about 0.25 at k = 6), so k = 6 is a descriptive choice rather than a strongly supported one. The clusters differ mainly by depth and magnitude (for example, one cluster holds the deep events with mean depth of about 325 km and the lowest mean risk; another holds the large events with mean magnitude 7.10). See the [report](report/earthquake_report.pdf) for the full profile.
+K-means (k = 6, `nstart = 25`) on position on the globe (3-D unit-sphere coordinates), log depth and magnitude. **Caveat:** the elbow plot has no sharp bend and the silhouette width is highest at k = 2 (about 0.32; about 0.25 at k = 6), so k = 6 is a descriptive choice rather than a strongly supported one. The clusters differ mainly by depth and magnitude (for example, one cluster holds the deep events with mean depth of about 325 km and the lowest mean risk; another holds the large events with mean magnitude 7.10). See the [report](report/earthquake_report.pdf) for the cluster table.
 
 <p align="center">
   <img src="outputs/plots/49_elbow.png" width="40%" alt="Elbow method">
@@ -152,8 +152,10 @@ Global-Earthquake-Risk-Analytics/
 |-- deploy_shinyapps.R           # publishes the dashboard to shinyapps.io
 |-- Global-Earthquake-Risk-Analytics.Rproj
 |-- report/
-|   |-- earthquake_report.Rmd    # editable report source
-|   `-- earthquake_report.pdf    # generated from the .Rmd
+|   |-- earthquake_report.Rmd    # case-study report source (6 pages, runs the cleaning code)
+|   |-- earthquake_report.pdf    # generated from the .Rmd
+|   |-- earthquake_report_extended.Rmd   # longer version with more figures and detail
+|   `-- earthquake_report_extended.pdf
 |-- data/
 |   |-- raw/database.csv         # original catalogue
 |   `-- processed/               # earthquakes_clean.csv / .rds
@@ -183,7 +185,8 @@ Global-Earthquake-Risk-Analytics/
 7. **Launch the dashboard:** see below.
 8. **Build the report and inspect results:**
    ```r
-   rmarkdown::render("report/earthquake_report.Rmd")
+   rmarkdown::render("report/earthquake_report.Rmd")            # 6-page case-study report
+   rmarkdown::render("report/earthquake_report_extended.Rmd")   # optional 21-page version
    ```
    then open `report/earthquake_report.pdf`, the images in `outputs/plots/` and the tables in `outputs/tables/`.
 
@@ -216,7 +219,7 @@ Dashboard features: sidebar filters (magnitude, depth, year range, risk level, r
 | Item | Status |
 |---|---|
 | Analysis pipeline, cleaned data, plots, tables, interactive map | Done (committed) |
-| README, R Markdown report and PDF | Done; PDF rendered from the `.Rmd` |
+| README, R Markdown reports and PDFs | Done; both PDFs rendered from their `.Rmd` files. The 6-page report re-runs the data-cleaning code and checks it against the saved clean data |
 | Dashboard code (`app.R`) | Done; server logic tested with a stubbed map widget. The Leaflet map tab was **not** tested in a browser, so check it when you first run the app |
 | Public dashboard URL | **Not done** (needs your shinyapps.io account) |
 | Dashboard screenshots in `screenshots/` | **Not done** (take them after running the app) |
