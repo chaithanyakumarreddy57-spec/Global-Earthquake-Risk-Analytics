@@ -4,6 +4,9 @@ Exploratory analysis, a transparent risk score, clustering, machine learning and
 
 > B.E. Artificial Intelligence and Data Science case study, Chaitanya Bharathi Institute of Technology (CBIT), Hyderabad.
 
+**Live Dashboard:** [Open the Interactive Shiny Dashboard](https://01a17d9b-cc0a-77d8-c785-5917bbf623c1.share.connect.posit.cloud)
+
+An R-based data analytics project exploring global earthquake patterns, risk categories, geographic distributions, and machine-learning models.
 ## Quick links
 
 | | | |
