@@ -4,7 +4,12 @@ Exploratory analysis, a transparent risk score, clustering, machine learning and
 
 > B.E. Artificial Intelligence and Data Science case study, Chaitanya Bharathi Institute of Technology (CBIT), Hyderabad.
 
-**Live Dashboard:** [Open the Interactive Shiny Dashboard](https://01a17d9b-cc0a-77d8-c785-5917bbf623c1.share.connect.posit.cloud)
+## 🌐 Live Dashboard
+
+🚀 **[Open the Global Earthquake Risk Analytics Dashboard](https://01a17d9b-cc0a-77d8-c785-5917bbf623c1.share.connect.posit.cloud)**
+
+The dashboard is hosted publicly on Posit Connect Cloud. If the link does not load, the service may be restarting; try again shortly.
+
 
 An R-based data analytics project exploring global earthquake patterns, risk categories, geographic distributions, and machine-learning models.
 ## Quick links
@@ -14,7 +19,7 @@ An R-based data analytics project exploring global earthquake patterns, risk cat
 | **Read** | [Case-study report (PDF, 6 pages)](report/earthquake_report.pdf) | [Report source (R Markdown)](report/earthquake_report.Rmd) / [Extended report (PDF, 21 pages)](report/earthquake_report_extended.pdf) |
 | **Inspect & reproduce** | [Analysis script](earthquake_analysis.R) | [Dashboard code](app.R) |
 | **Data & results** | [Dataset (raw CSV)](data/raw/database.csv) | [Plots](outputs/plots/) / [Tables](outputs/tables/) / [Interactive map](outputs/maps/earthquake_map.html) |
-| **Interact** | Live dashboard: **not published yet** (see [Run the dashboard](#run-the-dashboard) and [Publish the dashboard](#publish-the-dashboard-public-https-link)) | |
+| **Interact** | [Open the live Shiny dashboard](https://01a17d9b-cc0a-77d8-c785-5917bbf623c1.share.connect.posit.cloud) | Public HTTPS deployment on Posit Connect Cloud |
 
 > The interactive map file is a Leaflet widget. GitHub shows HTML files as source code, so download the repository and open `outputs/maps/earthquake_map.html` in a browser.
 
@@ -207,15 +212,13 @@ The app prints a local address such as `http://127.0.0.1:xxxx`. **That address o
 
 Dashboard features: sidebar filters (magnitude, depth, year range, risk level, region, cluster) with a reset button; key figures; interactive charts; a map coloured by magnitude or risk level; cluster and region summary tables; model comparison and feature importance; filtered data table with CSV download.
 
-## Publish the dashboard (public HTTPS link)
+## Public dashboard deployment
 
-1. Create a free account at <https://www.shinyapps.io>.
-2. In shinyapps.io open *Account > Tokens*, show your secret, and run once in R (use your own values; never commit them):
-   ```r
-   rsconnect::setAccountInfo(name = "<account>", token = "<token>", secret = "<secret>")
-   ```
-3. Run `source("deploy_shinyapps.R")`. It uploads only `app.R` and the three data/result files the app needs.
-4. When it finishes, R prints the public URL (`https://<account>.shinyapps.io/global-earthquake-risk-analytics/`). Open it in a private browser window to confirm it works, then add the link to the *Quick links* table above.
+The Shiny dashboard is published on **Posit Connect Cloud** and is available at:
+
+**[Launch the live dashboard](https://01a17d9b-cc0a-77d8-c785-5917bbf623c1.share.connect.posit.cloud)**
+
+The application uses a public HTTPS link. Open it in a private/incognito browser window to check public access. The source code remains available in [`app.R`](app.R).
 
 ## Project status
 
@@ -223,9 +226,9 @@ Dashboard features: sidebar filters (magnitude, depth, year range, risk level, r
 |---|---|
 | Analysis pipeline, cleaned data, plots, tables, interactive map | Done (committed) |
 | README, R Markdown reports and PDFs | Done; both PDFs rendered from their `.Rmd` files. The 6-page report re-runs the data-cleaning code and checks it against the saved clean data |
-| Dashboard code (`app.R`) | Done; server logic tested with a stubbed map widget. The Leaflet map tab was **not** tested in a browser, so check it when you first run the app |
-| Public dashboard URL | **Not done** (needs your shinyapps.io account) |
-| Dashboard screenshots in `screenshots/` | **Not done** (take them after running the app) |
+| Dashboard code (`app.R`) | Published and confirmed working in the hosted app; test interactive tabs and filters after future changes |
+| Public dashboard URL | **Published** on Posit Connect Cloud: [Open dashboard](https://01a17d9b-cc0a-77d8-c785-5917bbf623c1.share.connect.posit.cloud) |
+| Dashboard screenshots in `screenshots/` | Optional: add screenshots of the live dashboard for easier project review |
 | Confusion matrices | Added to the script; appear after the script is re-run |
 | `renv.lock` | Not created; `install_packages.R` lists the packages instead |
 
